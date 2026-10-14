@@ -27,9 +27,11 @@ function toTextArray(value) {
 function normalizeJob(raw = {}, source = "jsearch") {
   const title = raw.title || raw.job_title || raw.role || "Unknown Title";
   const company = raw.company || raw.employer_name || raw.companyName || "Unknown Company";
-  const location = raw.location || raw.job_city
-    ? `${raw.job_city || ""}${raw.job_state ? `, ${raw.job_state}` : ""}${raw.job_country && !raw.job_state ? `, ${raw.job_country}` : ""}`
-    : raw.job_country || "Remote";
+  const location = raw.location
+    ? raw.location
+    : raw.job_city
+      ? `${raw.job_city || ""}${raw.job_state ? `, ${raw.job_state}` : ""}${raw.job_country && !raw.job_state ? `, ${raw.job_country}` : ""}`
+      : raw.job_country || "Remote";
 
   const salary = normalizeSalary(raw);
   const requirements = toTextArray(raw.requirements || raw.job_required_skills || raw.job_highlights?.Qualifications || []);

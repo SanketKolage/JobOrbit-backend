@@ -1,5 +1,11 @@
+function toText(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).map((item) => String(item)).join(" ");
+  if (value == null) return "";
+  return String(value);
+}
+
 function normalize(value = "") {
-  return String(value)
+  return toText(value)
     .toLowerCase()
     .replace(/[^a-z0-9\s+.#/-]/g, " ")
     .replace(/\s+/g, " ")
@@ -70,8 +76,9 @@ function buildJobMatchAnalysis(resumeParsed = {}, jobDetails = {}) {
     ? clamp(Math.round((preferredTitles.filter((title) => normalize(jobDetails.title || "").includes(title)).length / preferredTitles.length) * 100), 35, 100)
     : 70;
 
+  const jobRequirementText = normalize(toText(jobDetails.requirements || jobDetails.description || ""));
   const educationScore = resumeParsed.education?.length
-    ? (jobDetails.requirements || jobDetails.description || "").toLowerCase().includes("bachelor") || (jobDetails.requirements || jobDetails.description || "").toLowerCase().includes("degree")
+    ? /bachelor|degree|masters|master|phd|associate|diploma/i.test(jobRequirementText)
       ? 90
       : 75
     : 70;

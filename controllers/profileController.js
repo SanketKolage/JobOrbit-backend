@@ -68,20 +68,22 @@ function fromResume(resume) {
   };
 }
 
-async function ensureProfile() {
-  let profile = await UserProfile.findOne().sort({ createdAt: -1 });
+async function ensureProfile(userId) {
+  if (!userId) throw new Error("User context is required");
+
+  let profile = await UserProfile.findOne({ userId }).sort({ createdAt: -1 });
 
   if (profile) return profile;
 
-  const latestResume = await Resume.findOne({ status: "parsed" }).sort({ createdAt: -1 });
-  const baseProfile = latestResume ? fromResume(latestResume) : defaultProfile();
+  const latestResume = await Resume.findOne({ userId, status: "parsed" }).sort({ createdAt: -1 });
+  const baseProfile = latestResume ? { ...fromResume(latestResume), userId } : { ...defaultProfile(), userId };
   profile = await UserProfile.create(baseProfile);
   return profile;
 }
 
 exports.getProfile = async (req, res) => {
   try {
-    const profile = await ensureProfile();
+    const profile = await ensureProfile(req.user.id);
     res.json({ success: true, profile });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -90,10 +92,11 @@ exports.getProfile = async (req, res) => {
 
 exports.updateProfile = async (req, res) => {
   try {
-    const existing = await ensureProfile();
+    const existing = await ensureProfile(req.user.id);
     const payload = {
       ...existing.toObject(),
       ...req.body,
+      userId: req.user.id,
       preferredLocations: cleanStringArray(req.body.preferredLocations),
       skills: cleanStringArray(req.body.skills),
       technicalSkills: cleanStringArray(req.body.technicalSkills),
@@ -120,14 +123,14 @@ exports.updateProfile = async (req, res) => {
 
 exports.syncProfileFromResume = async (req, res) => {
   try {
-    const latestResume = await Resume.findOne({ status: "parsed" }).sort({ createdAt: -1 });
+    const latestResume = await Resume.findOne({ userId: req.user.id, status: "parsed" }).sort({ createdAt: -1 });
 
     if (!latestResume) {
       return res.status(404).json({ success: false, message: "No parsed resume found to sync from" });
     }
 
-    const profileData = fromResume(latestResume);
-    const existing = await ensureProfile();
+    const profileData = { ...fromResume(latestResume), userId: req.user.id };
+    const existing = await ensureProfile(req.user.id);
     const profile = await UserProfile.findByIdAndUpdate(
       existing._id,
       { ...existing.toObject(), ...profileData },

@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const ResumeSchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
     fileName: { type: String, required: true },
     filePath: { type: String, required: true },
     rawText: { type: String },
@@ -62,5 +67,7 @@ const ResumeSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+ResumeSchema.index({ userId: 1, createdAt: -1 });
 
 module.exports = mongoose.model("Resume", ResumeSchema);

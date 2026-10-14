@@ -46,6 +46,11 @@ const CertificationSchema = new mongoose.Schema(
 
 const UserProfileSchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      sparse: true,
+    },
     name: { type: String, default: "" },
     email: { type: String, default: "" },
     phone: { type: String, default: "" },
@@ -85,6 +90,7 @@ const UserProfileSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-UserProfileSchema.index({ email: 1 }, { unique: true, sparse: true });
+UserProfileSchema.index({ userId: 1 }, { unique: true, sparse: true });
+UserProfileSchema.index({ email: 1 }, { unique: false, sparse: true });
 
 module.exports = mongoose.model("UserProfile", UserProfileSchema);

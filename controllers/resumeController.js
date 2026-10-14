@@ -37,8 +37,8 @@ exports.uploadResume = async (req, res) => {
       return res.status(400).json({ success: false, message: "No file uploaded" });
     }
 
-    // Create resume record
     const resume = new Resume({
+      userId: req.user.id,
       fileName: req.file.originalname,
       filePath: req.file.path,
       status: "parsing",
@@ -158,7 +158,7 @@ exports.uploadResume = async (req, res) => {
 // ── GET /api/resume ────────────────────────────────────────────────────────────
 exports.getAllResumes = async (req, res) => {
   try {
-    const resumes = await Resume.find().sort({ createdAt: -1 }).select("-rawText");
+    const resumes = await Resume.find({ userId: req.user.id }).sort({ createdAt: -1 }).select("-rawText");
     res.json({ success: true, resumes });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -168,7 +168,7 @@ exports.getAllResumes = async (req, res) => {
 // ── GET /api/resume/:id ────────────────────────────────────────────────────────
 exports.getResume = async (req, res) => {
   try {
-    const resume = await Resume.findById(req.params.id);
+    const resume = await Resume.findOne({ _id: req.params.id, userId: req.user.id });
     if (!resume) return res.status(404).json({ success: false, message: "Resume not found" });
     res.json({ success: true, resume });
   } catch (error) {
@@ -179,10 +179,9 @@ exports.getResume = async (req, res) => {
 // ── DELETE /api/resume/:id ─────────────────────────────────────────────────────
 exports.deleteResume = async (req, res) => {
   try {
-    const resume = await Resume.findById(req.params.id);
+    const resume = await Resume.findOne({ _id: req.params.id, userId: req.user.id });
     if (!resume) return res.status(404).json({ success: false, message: "Resume not found" });
 
-    // Delete file
     if (fs.existsSync(resume.filePath)) {
       fs.unlinkSync(resume.filePath);
     }

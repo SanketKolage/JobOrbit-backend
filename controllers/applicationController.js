@@ -55,12 +55,12 @@ exports.createApplication = async (req, res) => {
   try {
     const { resumeId, jobId, priority } = req.body;
 
-    const existing = await Application.findOne({ resumeId, jobId });
+    const existing = await Application.findOne({ userId: req.user.id, resumeId, jobId });
     if (existing) {
       return res.status(409).json({ success: false, message: "Application already exists", application: existing });
     }
 
-    const application = new Application({ resumeId, jobId, priority: priority || "medium", status: "new" });
+    const application = new Application({ userId: req.user.id, resumeId, jobId, priority: priority || "medium", status: "new" });
     await application.save();
 
     res.status(201).json({ success: true, application });
@@ -77,7 +77,7 @@ exports.autoApplyJobs = async (req, res) => {
       return res.status(400).json({ success: false, message: "Resume is required for auto apply." });
     }
 
-    const resume = await Resume.findById(resumeId);
+    const resume = await Resume.findOne({ _id: resumeId, userId: req.user.id });
     if (!resume?.parsed) {
       return res.status(400).json({ success: false, message: "Resume not parsed or missing." });
     }
@@ -90,13 +90,14 @@ exports.autoApplyJobs = async (req, res) => {
         continue;
       }
 
-      const existing = await Application.findOne({ resumeId, jobId });
+      const existing = await Application.findOne({ userId: req.user.id, resumeId, jobId });
       if (existing) {
         results.push({ jobId, status: existing.status || "new" });
         continue;
       }
 
       const app = new Application({
+        userId: req.user.id,
         resumeId,
         jobId,
         status: "applying",
@@ -145,7 +146,7 @@ exports.autoApplyJobs = async (req, res) => {
 exports.getApplications = async (req, res) => {
   try {
     const { status, resumeId } = req.query;
-    const filter = {};
+    const filter = { userId: req.user.id };
     if (status) filter.status = status;
     if (resumeId) filter.resumeId = resumeId;
 
@@ -163,7 +164,7 @@ exports.getApplications = async (req, res) => {
 // ── GET /api/applications/:id ──────────────────────────────────────────────────
 exports.getApplication = async (req, res) => {
   try {
-    const application = await Application.findById(req.params.id)
+    const application = await Application.findOne({ _id: req.params.id, userId: req.user.id })
       .populate("resumeId")
       .populate("jobId");
     if (!application) return res.status(404).json({ success: false, message: "Not found" });
@@ -183,7 +184,7 @@ exports.updateStatus = async (req, res) => {
     if (normalizedStatus === "applied" && !req.body.appliedAt) update.appliedAt = new Date();
     if (normalizedStatus === "approved") update.approvedAt = new Date();
 
-    const application = await Application.findByIdAndUpdate(req.params.id, update, { new: true });
+    const application = await Application.findOneAndUpdate({ _id: req.params.id, userId: req.user.id }, update, { new: true });
     res.json({ success: true, application });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -192,7 +193,7 @@ exports.updateStatus = async (req, res) => {
 
 exports.generateTailoredResume = async (req, res) => {
   try {
-    const application = await Application.findById(req.params.id)
+    const application = await Application.findOne({ _id: req.params.id, userId: req.user.id })
       .populate("resumeId")
       .populate("jobId");
 
@@ -226,7 +227,7 @@ exports.generateTailoredResume = async (req, res) => {
 // ── POST /api/applications/:id/cover-letter ────────────────────────────────────
 exports.generateCoverLetter = async (req, res) => {
   try {
-    const application = await Application.findById(req.params.id)
+    const application = await Application.findOne({ _id: req.params.id, userId: req.user.id })
       .populate("resumeId")
       .populate("jobId");
 
@@ -250,7 +251,7 @@ exports.generateCoverLetter = async (req, res) => {
 // ── POST /api/applications/:id/tailoring ──────────────────────────────────────
 exports.generateTailoring = async (req, res) => {
   try {
-    const application = await Application.findById(req.params.id)
+    const application = await Application.findOne({ _id: req.params.id, userId: req.user.id })
       .populate("resumeId")
       .populate("jobId");
 
@@ -276,7 +277,7 @@ exports.sendEmail = async (req, res) => {
     const { to } = req.body;
     if (!to) return res.status(400).json({ success: false, message: "Recipient email required" });
 
-    const application = await Application.findById(req.params.id)
+    const application = await Application.findOne({ _id: req.params.id, userId: req.user.id })
       .populate("resumeId")
       .populate("jobId");
 
@@ -320,7 +321,7 @@ exports.addFollowUp = async (req, res) => {
   try {
     const { type, notes, to } = req.body;
 
-    const application = await Application.findById(req.params.id)
+    const application = await Application.findOne({ _id: req.params.id, userId: req.user.id })
       .populate("resumeId")
       .populate("jobId");
 
@@ -352,7 +353,7 @@ exports.addInterview = async (req, res) => {
   try {
     const { scheduledAt, type, interviewers, notes } = req.body;
 
-    const application = await Application.findById(req.params.id);
+    const application = await Application.findOne({ _id: req.params.id, userId: req.user.id });
     if (!application) return res.status(404).json({ success: false, message: "Not found" });
 
     application.interviews.push({ scheduledAt, type, interviewers, notes });
@@ -369,8 +370,8 @@ exports.addInterview = async (req, res) => {
 exports.updateCoverLetter = async (req, res) => {
   try {
     const { content } = req.body;
-    const application = await Application.findByIdAndUpdate(
-      req.params.id,
+    const application = await Application.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user.id },
       { "coverLetter.content": content, "coverLetter.customized": true },
       { new: true }
     );
@@ -383,7 +384,7 @@ exports.updateCoverLetter = async (req, res) => {
 // ── DELETE /api/applications/:id ──────────────────────────────────────────────
 exports.deleteApplication = async (req, res) => {
   try {
-    await Application.findByIdAndDelete(req.params.id);
+    await Application.findOneAndDelete({ _id: req.params.id, userId: req.user.id });
     res.json({ success: true, message: "Application deleted" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -394,7 +395,8 @@ exports.deleteApplication = async (req, res) => {
 exports.getStats = async (req, res) => {
   try {
     const { resumeId } = req.query;
-    const filter = resumeId ? { resumeId } : {};
+    const filter = { userId: req.user.id };
+    if (resumeId) filter.resumeId = resumeId;
 
     const stats = await Application.aggregate([
       { $match: filter },

@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const ApplicationSchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
     resumeId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Resume",
@@ -110,5 +115,8 @@ const ApplicationSchema = new mongoose.Schema(
  
   { timestamps: true }
 );
+
+ApplicationSchema.index({ userId: 1, createdAt: -1 });
+ApplicationSchema.index({ userId: 1, status: 1 });
 
 module.exports = mongoose.model("Application", ApplicationSchema);

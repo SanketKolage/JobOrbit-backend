@@ -8,13 +8,14 @@ const { upsertUniqueJobs } = require("../services/job/duplicateDetector.service"
 exports.searchJobs = async (req, res) => {
   try {
     const { query, location, jobType, isRemote, resumeId, page } = req.body;
+    const userId = req.user.id;
 
     let searchQuery = query;
 
     // Auto-build query from resume if resumeId provided
     let resumeParsed = null;
     if (resumeId) {
-      const resume = await Resume.findById(resumeId);
+      const resume = await Resume.findOne({ _id: resumeId, userId });
       if (resume?.parsed) {
         resumeParsed = resume.parsed;
         if (!query) {
@@ -41,13 +42,14 @@ exports.searchJobs = async (req, res) => {
       externalId: jobData.externalId || jobData.sourceJobId,
       sourceJobId: jobData.sourceJobId || jobData.externalId,
       source: jobData.source || "jsearch",
-    })));
+      userId,
+    })), userId);
 
     // If resume provided, batch score all jobs
     if (resumeParsed && savedJobs.length > 0) {
       const scores = await aiService.batchScoreJobs(resumeParsed, savedJobs);
       for (const scoreResult of scores) {
-        await Job.findByIdAndUpdate(scoreResult.jobId, {
+        await Job.findOneAndUpdate({ _id: scoreResult.jobId, userId }, {
           aiMatch: {
             resumeId,
             score: scoreResult.score,
@@ -68,9 +70,9 @@ exports.searchJobs = async (req, res) => {
           },
         });
       }
-      // Return sorted by score
       const scoredJobs = await Job.find({
         _id: { $in: savedJobs.map((j) => j._id) },
+        userId,
       }).sort({ "aiMatch.score": -1 });
 
       return res.json({ success: true, jobs: scoredJobs, total: scoredJobs.length });
@@ -87,10 +89,10 @@ exports.searchJobs = async (req, res) => {
 exports.scoreJob = async (req, res) => {
   try {
     const { resumeId } = req.body;
-    const job = await Job.findById(req.params.id);
+    const job = await Job.findOne({ _id: req.params.id, userId: req.user.id });
     if (!job) return res.status(404).json({ success: false, message: "Job not found" });
 
-    const resume = await Resume.findById(resumeId);
+    const resume = await Resume.findOne({ _id: resumeId, userId: req.user.id });
     if (!resume?.parsed) {
       return res.status(404).json({ success: false, message: "Resume not found or not parsed" });
     }
@@ -127,7 +129,7 @@ exports.scoreJob = async (req, res) => {
 exports.getJobs = async (req, res) => {
   try {
     const { resumeId, minScore, saved, page = 1, limit = 20 } = req.query;
-    const filter = { isHidden: false };
+    const filter = { isHidden: false, userId: req.user.id };
 
     if (saved === "true") filter.isSaved = true;
     if (resumeId) filter["aiMatch.resumeId"] = resumeId;
@@ -148,7 +150,7 @@ exports.getJobs = async (req, res) => {
 // ── GET /api/jobs/:id ──────────────────────────────────────────────────────────
 exports.getJob = async (req, res) => {
   try {
-    const job = await Job.findById(req.params.id);
+    const job = await Job.findOne({ _id: req.params.id, userId: req.user.id });
     if (!job) return res.status(404).json({ success: false, message: "Job not found" });
     res.json({ success: true, job });
   } catch (error) {
@@ -159,7 +161,7 @@ exports.getJob = async (req, res) => {
 // ── PATCH /api/jobs/:id/save ───────────────────────────────────────────────────
 exports.toggleSave = async (req, res) => {
   try {
-    const job = await Job.findById(req.params.id);
+    const job = await Job.findOne({ _id: req.params.id, userId: req.user.id });
     if (!job) return res.status(404).json({ success: false, message: "Job not found" });
 
     job.isSaved = !job.isSaved;
@@ -174,7 +176,7 @@ exports.toggleSave = async (req, res) => {
 // ── PATCH /api/jobs/:id/hide ───────────────────────────────────────────────────
 exports.hideJob = async (req, res) => {
   try {
-    await Job.findByIdAndUpdate(req.params.id, { isHidden: true });
+    await Job.findOneAndUpdate({ _id: req.params.id, userId: req.user.id }, { isHidden: true });
     res.json({ success: true, message: "Job hidden" });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

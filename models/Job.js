@@ -2,6 +2,12 @@ const mongoose = require("mongoose");
 
 const JobSchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      index: true,
+      sparse: true,
+    },
     // Source data
     externalId: { type: String },
     sourceJobId: { type: String },
@@ -52,6 +58,7 @@ const JobSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+JobSchema.index({ userId: 1, createdAt: -1 });
 JobSchema.index({ source: 1, sourceJobId: 1 }, { unique: false });
 JobSchema.index({ title: "text", company: "text", description: "text" });
 JobSchema.index({ "aiMatch.score": -1 });

@@ -1,44 +1,237 @@
 const { GoogleGenAI } = require("@google/genai");
+const Anthropic = require("@anthropic-ai/sdk");
 const { buildJobMatchAnalysis } = require("./job/jobMatcher.service");
 const { analyzeJobDescription } = require("./ai/jdAnalyzer.service");
 const { buildTailoredResume } = require("./ai/resumeTailor.service");
 const { buildCoverLetterText } = require("./ai/coverLetter.service");
 const { buildAnswer, isPersonalOrLegalQuestion } = require("./ai/applicationAnswer.service");
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-});
+let geminiClient = null;
 
-const MODEL = "gemini-2.5-flash";
-
-async function generateJSON(prompt, retries = 3) {
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
-
-    return JSON.parse(response.text);
-  } catch (err) {
-    if (
-      retries > 0 &&
-      (err.message?.includes("503") ||
-        err.message?.includes("UNAVAILABLE"))
-    ) {
-      console.log(`Retrying Gemini request... (${retries} left)`);
-
-      await new Promise((resolve) =>
-        setTimeout(resolve, 2000)
-      );
-
-      return generateJSON(prompt, retries - 1);
-    }
-
-    throw err;
+function getGeminiClient() {
+  if (!process.env.GEMINI_API_KEY) return null;
+  if (!geminiClient) {
+    geminiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   }
+  return geminiClient;
+}
+
+function getConfiguredProviders() {
+  const configured = {
+    openrouter: !!process.env.OPENROUTER_API_KEY,
+    openai: !!process.env.OPENAI_API_KEY,
+    claude: !!process.env.ANTHROPIC_API_KEY,
+    gemini: !!process.env.GEMINI_API_KEY,
+  };
+
+  const preferredOrder = (process.env.AI_PROVIDERS || "openrouter,openai,claude,gemini")
+    .split(",")
+    .map((provider) => provider.trim().toLowerCase())
+    .filter(Boolean);
+
+  const validProviders = preferredOrder.filter((provider) => configured[provider]);
+  const remainingProviders = Object.keys(configured)
+    .filter((provider) => configured[provider] && !validProviders.includes(provider));
+
+  return [...validProviders, ...remainingProviders];
+}
+
+function isQuotaError(error) {
+  const errorText = [
+    error?.message,
+    error?.status,
+    error?.code,
+    error?.response?.status,
+    error?.response?.data?.error?.message,
+    error?.response?.data?.message,
+    JSON.stringify(error?.response?.data || {})
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return /(429|rate[_ -]?limit|quota|insufficient_quota|too many requests|billing|limit reached|exceeded)/i.test(errorText);
+}
+
+function isTransientError(error) {
+  const errorText = [
+    error?.message,
+    error?.status,
+    error?.code,
+    JSON.stringify(error?.response?.data || {})
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return /(429|408|500|502|503|504|timeout|timed out|temporar|rate[_ -]?limit|too many requests|unavailable|connection reset|network)/i.test(errorText);
+}
+
+function getProviderModel(provider) {
+  const configMap = {
+    openrouter: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
+    openai: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    claude: process.env.CLAUDE_MODEL || "claude-3-5-sonnet-20241022",
+    gemini: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+  };
+
+  return configMap[provider] || "gpt-4o-mini";
+}
+
+function getErrorMessage(error) {
+  if (!error) return "Unknown AI provider error";
+  if (error.response?.data?.error?.message) return error.response.data.error.message;
+  if (error.response?.data?.message) return error.response.data.message;
+  if (error.message) return error.message;
+  return JSON.stringify(error);
+}
+
+async function callGemini(prompt, { jsonMode = false } = {}) {
+  const client = getGeminiClient();
+  if (!client) {
+    throw new Error("Gemini API key is missing");
+  }
+
+  const response = await client.models.generateContent({
+    model: getProviderModel("gemini"),
+    contents: prompt,
+    config: jsonMode ? { responseMimeType: "application/json" } : {},
+  });
+
+  return response.text;
+}
+
+async function callOpenAICompatible(provider, prompt, { jsonMode = false } = {}) {
+  const apiKey = provider === "openrouter"
+    ? process.env.OPENROUTER_API_KEY
+    : process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(`${provider} API key is missing`);
+  }
+
+  const endpoint = provider === "openrouter"
+    ? "https://openrouter.ai/api/v1/chat/completions"
+    : "https://api.openai.com/v1/chat/completions";
+
+  const body = {
+    model: getProviderModel(provider),
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0.2,
+  };
+
+  if (jsonMode) {
+    body.response_format = { type: "json_object" };
+  }
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      ...(provider === "openrouter" && {
+        "HTTP-Referer": process.env.CLIENT_URL || "http://localhost:5173",
+        "X-Title": "Auto Job Applier",
+      }),
+    },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const message = data?.error?.message || `Request failed with status ${response.status}`;
+    const error = new Error(message);
+    error.status = response.status;
+    error.response = { data };
+    throw error;
+  }
+
+  return data.choices?.[0]?.message?.content || "";
+}
+
+async function callClaude(prompt, { jsonMode = false } = {}) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new Error("Anthropic API key is missing");
+  }
+
+  const client = new Anthropic({ apiKey });
+  const response = await client.messages.create({
+    model: getProviderModel("claude"),
+    max_tokens: 2000,
+    system: jsonMode ? "Return valid JSON only." : "Return concise, structured output.",
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const text = (response.content || [])
+    .map((part) => (typeof part === "string" ? part : part?.text || ""))
+    .join("")
+    .trim();
+
+  if (!text) {
+    throw new Error("Claude returned empty response");
+  }
+
+  return text;
+}
+
+async function callProvider(prompt, { jsonMode = false } = {}) {
+  const providers = getConfiguredProviders();
+  if (!providers.length) {
+    throw new Error("No AI provider configured. Add OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY.");
+  }
+
+  let lastError = null;
+
+  for (const provider of providers) {
+    try {
+      switch (provider) {
+        case "openrouter":
+          return await callOpenAICompatible("openrouter", prompt, { jsonMode });
+        case "openai":
+          return await callOpenAICompatible("openai", prompt, { jsonMode });
+        case "claude":
+          return await callClaude(prompt, { jsonMode });
+        case "gemini":
+          return await callGemini(prompt, { jsonMode });
+        default:
+          throw new Error(`Unsupported AI provider: ${provider}`);
+      }
+    } catch (error) {
+      lastError = error;
+      const reason = getErrorMessage(error);
+      const shouldRetry = isQuotaError(error) || isTransientError(error);
+
+      console.warn(`[AI Provider] ${provider} failed: ${reason}`);
+
+      if (!shouldRetry) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError || new Error("All configured AI providers failed");
+}
+
+async function generateJSON(prompt, retries = 2) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const raw = await callProvider(prompt, { jsonMode: true });
+      return JSON.parse(raw);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= retries || !isTransientError(error)) {
+        throw error;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+
+  throw lastError || new Error("Unable to generate valid JSON from AI provider");
 }
 async function generateTailoredResume(
   resumeParsed,
@@ -103,12 +296,8 @@ ${JSON.stringify(jobDetails)}
 // Generic Text Generator
 // ─────────────────────────────────────────────────────────────
 async function generateText(prompt) {
-  const response = await ai.models.generateContent({
-    model: MODEL,
-    contents: prompt,
-  });
-
-  return response.text.trim();
+  const responseText = await callProvider(prompt, { jsonMode: false });
+  return responseText.trim();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -418,6 +607,8 @@ async function generateApplicationAnswers(resumeParsed, questions = []) {
 }
 
 module.exports = {
+  getConfiguredProviders,
+  isQuotaError,
   parseResume,
   scoreJobMatch,
   generateCoverLetter,
